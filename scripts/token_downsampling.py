@@ -116,7 +116,7 @@ class TokenDownsamplingScript(scripts.Script):
         apply_patch(
             model=shared.sd_model,
             downsample_factor=shared.opts.token_downsampling_factor,
-            max_depth=max_depth,
+            max_depth=2**(max_depth-1),
         )
 
         p.extra_generation_params["Token downsampling factor"] = shared.opts.token_downsampling_factor
