@@ -115,22 +115,26 @@ class TokenDownsamplingScript(scripts.Script):
             remove_patch(shared.sd_model)
             return
 
+        # xyz overrides settings via p
+        downsample_factor = getattr(p, "token_downsampling_factor", shared.opts.token_downsampling_factor)
+        max_depth = getattr(p, "token_downsampling_max_depth", shared.opts.token_downsampling_max_depth)
+        disable_after = getattr(p, "token_downsampling_disable_after", shared.opts.token_downsampling_disable_after)
+
         # SDXL only has depth 2 and 3
-        max_depth = shared.opts.token_downsampling_max_depth
         if shared.sd_model.is_sdxl and max_depth not in (2, 3):
             max_depth = min(max(max_depth, 2), 3)
             print(f"Token Downsampling: clamped max_depth to {max_depth} for SDXL")
 
         apply_patch(
             model=shared.sd_model,
-            downsample_factor=shared.opts.token_downsampling_factor,
+            downsample_factor=downsample_factor,
             max_depth=2**(max_depth-1),
-            disable_after=int(shared.opts.token_downsampling_disable_after * p.steps),
+            disable_after=int(disable_after * p.steps),
         )
 
-        p.extra_generation_params["ToDo factor"] = shared.opts.token_downsampling_factor
-        p.extra_generation_params["ToDo max depth"] = shared.opts.token_downsampling_max_depth
-        p.extra_generation_params["ToDo disable after"] = shared.opts.token_downsampling_disable_after
+        p.extra_generation_params["ToDo factor"] = downsample_factor
+        p.extra_generation_params["ToDo max depth"] = max_depth
+        p.extra_generation_params["ToDo disable after"] = disable_after
 
     def process_batch(self, p, *args, **kwargs):
         if self._enabled():
@@ -142,10 +146,10 @@ def on_ui_settings():
 
     options = {
         "token_downsampling_factor": shared.OptionInfo(
-            default=1,
+            default=1.0,
             label="Token downsampling factor",
             component=gr.Slider,
-            component_args={"minimum": 1, "maximum": 5, "step": 0.5},
+            component_args={"minimum": 1.0, "maximum": 5.0, "step": 0.5},
             infotext="ToDo factor",
         ).info("1 = disable"),
         "token_downsampling_max_depth": shared.OptionInfo(
@@ -169,5 +173,17 @@ def on_ui_settings():
         shared.opts.add_option(name, opt)
 
 
+def add_xyz_axis_options():
+    xyz_grid = [x for x in scripts.scripts_data if x.script_class.__module__ == "xyz_grid.py"][0].module
+
+    todo_axis_options = [
+        xyz_grid.AxisOption("[ToDo] Downsampling factor", float, xyz_grid.apply_field("token_downsampling_factor")),
+        xyz_grid.AxisOption("[ToDo] Max depth", int, xyz_grid.apply_field("token_downsampling_max_depth"), choices=lambda: [1, 2, 3, 4]),
+        xyz_grid.AxisOption("[ToDo] Disable after", float, xyz_grid.apply_field("token_downsampling_disable_after")),
+    ]
+
+    xyz_grid.axis_options.extend(todo_axis_options)
+
+
 script_callbacks.on_ui_settings(on_ui_settings)
-# TODO: xyz support
+script_callbacks.on_before_ui(add_xyz_axis_options)
