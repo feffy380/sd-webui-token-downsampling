@@ -44,6 +44,7 @@ def hook_todo_model(model: torch.nn.Module):
     """ Adds a forward pre hook to get the image size. This hook can be removed with remove_patch. """
     def hook(module, args):
         module._todo_info["size"] = (args[0].shape[2], args[0].shape[3])
+        module._todo_info["current_step"] += 1
         return None
 
     model._todo_info["hooks"].append(model.register_forward_pre_hook(hook))
@@ -52,6 +53,8 @@ def hook_todo_model(model: torch.nn.Module):
 def hook_attention(attn: torch.nn.Module):
     """ Adds a forward pre hook to downsample attention keys and values. This hook can be removed with remove_patch. """
     def hook(module, args, kwargs):
+        if module._todo_info["current_step"] > module._todo_info["args"]["disable_after"]:
+            return
         hidden_states = args[0]
         m = compute_merge(hidden_states, module._todo_info)
         kwargs["context"] = m(hidden_states)
@@ -60,7 +63,7 @@ def hook_attention(attn: torch.nn.Module):
     attn._todo_info["hooks"].append(attn.register_forward_pre_hook(hook, with_kwargs=True))
 
 
-def apply_patch(model: torch.nn.Module, downsample_factor: float = 2, max_depth: int = 1):
+def apply_patch(model: torch.nn.Module, downsample_factor: float = 2, max_depth: int = 1, disable_after: float = 1.0):
     """ Patches the UNet's transformer blocks to apply token downsampling. """
 
     # make sure model isn't already patched
@@ -69,10 +72,12 @@ def apply_patch(model: torch.nn.Module, downsample_factor: float = 2, max_depth:
     diffusion_model = model.model.diffusion_model
     diffusion_model._todo_info = {
         "size": None,
+        "current_step": 0,
         "hooks": [],
         "args": {
             "downsample_factor": downsample_factor,
             "max_depth": max_depth,
+            "disable_after": disable_after,
         },
     }
     hook_todo_model(diffusion_model)
@@ -102,8 +107,11 @@ class TokenDownsamplingScript(scripts.Script):
     def show(self, is_img2img):
         return scripts.AlwaysVisible
 
+    def _enabled(self):
+        return shared.opts.token_downsampling_factor > 1
+
     def process(self, p, *args, **kwargs):
-        if shared.opts.token_downsampling_factor <= 1:
+        if not self._enabled():
             remove_patch(shared.sd_model)
             return
 
@@ -117,10 +125,16 @@ class TokenDownsamplingScript(scripts.Script):
             model=shared.sd_model,
             downsample_factor=shared.opts.token_downsampling_factor,
             max_depth=2**(max_depth-1),
+            disable_after=int(shared.opts.token_downsampling_disable_after * p.steps),
         )
 
-        p.extra_generation_params["Token downsampling factor"] = shared.opts.token_downsampling_factor
-        p.extra_generation_params["Token downsampling max depth"] = shared.opts.token_downsampling_max_depth
+        p.extra_generation_params["ToDo factor"] = shared.opts.token_downsampling_factor
+        p.extra_generation_params["ToDo max depth"] = shared.opts.token_downsampling_max_depth
+        p.extra_generation_params["ToDo disable after"] = shared.opts.token_downsampling_disable_after
+
+    def process_batch(self, p, *args, **kwargs):
+        if self._enabled():
+            shared.sd_model.model.diffusion_model._todo_info["current_step"] = 0
 
 
 def on_ui_settings():
@@ -131,16 +145,23 @@ def on_ui_settings():
             default=1,
             label="Token downsampling factor",
             component=gr.Slider,
-            component_args={"minimum": 1, "maximum": 10, "step": 1},
-            infotext="Token downsampling factor",
+            component_args={"minimum": 1, "maximum": 5, "step": 0.5},
+            infotext="ToDo factor",
         ).info("1 = disable"),
         "token_downsampling_max_depth": shared.OptionInfo(
             default=1,
             label="Token downsampling max depth",
             component=gr.Slider,
             component_args={"minimum": 1, "maximum": 4, "step": 1},
-            infotext="Token downsampling max depth",
+            infotext="ToDo max depth",
         ).info("Higher affects more layers. For SDXL only 2 and 3 are valid and will be clamped"),
+        "token_downsampling_disable_after": shared.OptionInfo(
+            default=1.0,
+            label="Token downsampling disable after",
+            component=gr.Slider,
+            component_args={"minimum": 0.0, "maximum": 1.0, "step": 0.1},
+            infotext="ToDo disable after",
+        ).info("Disable ToDo after a percentage of steps to improve details"),
     }
 
     for name, opt in options.items():
