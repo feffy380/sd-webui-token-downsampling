@@ -107,11 +107,11 @@ class TokenDownsamplingScript(scripts.Script):
     def show(self, is_img2img):
         return scripts.AlwaysVisible
 
-    def _enabled(self):
-        return shared.opts.token_downsampling_factor > 1
+    def _enabled(self, p):
+        return getattr(p, "token_downsampling_factor", shared.opts.token_downsampling_factor) > 1
 
     def process(self, p, *args, **kwargs):
-        if not self._enabled():
+        if not self._enabled(p):
             remove_patch(shared.sd_model)
             return
 
@@ -137,7 +137,7 @@ class TokenDownsamplingScript(scripts.Script):
         p.extra_generation_params["ToDo disable after"] = disable_after
 
     def process_batch(self, p, *args, **kwargs):
-        if self._enabled():
+        if self._enabled(p):
             shared.sd_model.model.diffusion_model._todo_info["current_step"] = 0
 
 
