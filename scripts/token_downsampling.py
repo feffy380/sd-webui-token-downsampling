@@ -25,8 +25,8 @@ def compute_merge(x: torch.Tensor, tome_info: dict):
     original_h, original_w = tome_info["size"]
     original_tokens = original_h * original_w
     downsample = int(math.ceil(math.sqrt(original_tokens // x.shape[1])))
-    cur_h = original_h // downsample
-    cur_w = original_w // downsample
+    cur_h = math.ceil(original_h / downsample)
+    cur_w = math.ceil(original_w / downsample)
 
     args = tome_info["args"]
     downsample_factor = args["downsample_factor"]
