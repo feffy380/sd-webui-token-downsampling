@@ -120,10 +120,13 @@ class TokenDownsamplingScript(scripts.Script):
         max_depth = getattr(p, "token_downsampling_max_depth", shared.opts.token_downsampling_max_depth)
         disable_after = getattr(p, "token_downsampling_disable_after", shared.opts.token_downsampling_disable_after)
 
-        # SDXL only has depth 2 and 3
-        if shared.sd_model.is_sdxl and max_depth not in (2, 3):
-            max_depth = min(max(max_depth, 2), 3)
-            print(f"Token Downsampling: clamped max_depth to {max_depth} for SDXL")
+        # SDXL only has two depths
+        if shared.sd_model.is_sdxl:
+            if max_depth > 2:
+                max_depth = min(max_depth, 2)
+                print(f"Token Downsampling: clamped max_depth to {max_depth} for SDXL")
+            # sdxl uses 2 or 3. offset to start at 1 for UI simplicity
+            max_depth += 1
 
         apply_patch(
             model=shared.sd_model,
@@ -158,7 +161,7 @@ def on_ui_settings():
             component=gr.Slider,
             component_args={"minimum": 1, "maximum": 4, "step": 1},
             infotext="ToDo max depth",
-        ).info("Higher affects more layers. For SDXL only 2 and 3 are valid and will be clamped"),
+        ).info("Higher affects more layers. For SDXL only 1 and 2 are valid and will be clamped"),
         "token_downsampling_disable_after": shared.OptionInfo(
             default=1.0,
             label="Token downsampling disable after",
