@@ -29,10 +29,10 @@ def compute_merge(x: torch.Tensor, tome_info: dict):
     cur_w = math.ceil(original_w / downsample)
 
     args = tome_info["args"]
-    downsample_factor = args["downsample_factor"]
 
     merge_op = lambda x: x
     if downsample <= args["max_depth"]:
+        downsample_factor = args["downsample_factor"][downsample]
         new_h = int(cur_h / downsample_factor)
         new_w = int(cur_w / downsample_factor)
         merge_op = lambda x: up_or_downsample(x, cur_w, cur_h, new_w, new_h)
@@ -63,11 +63,25 @@ def hook_attention(attn: torch.nn.Module):
     attn._todo_info["hooks"].append(attn.register_forward_pre_hook(hook, with_kwargs=True))
 
 
-def apply_patch(model: torch.nn.Module, downsample_factor: float = 2, max_depth: int = 1, disable_after: float = 1.0):
+def apply_patch(
+    model: torch.nn.Module,
+    is_sdxl: bool = False,
+    downsample_factor: float = 2,
+    downsample_factor2: float = 1,
+    disable_after: float = 1.0
+):
     """ Patches the UNet's transformer blocks to apply token downsampling. """
 
     # make sure model isn't already patched
     remove_patch(model)
+
+    factors = [downsample_factor, downsample_factor2]
+    # {depth: factor}
+    factors = {(2**(i + int(is_sdxl))): factor for i, factor in enumerate(factors)}
+
+    max_depth = 2 if downsample_factor2 > 1 else 1
+    if is_sdxl:
+        max_depth *= 2
 
     diffusion_model = model.model.diffusion_model
     diffusion_model._todo_info = {
@@ -75,7 +89,7 @@ def apply_patch(model: torch.nn.Module, downsample_factor: float = 2, max_depth:
         "current_step": 0,
         "hooks": [],
         "args": {
-            "downsample_factor": downsample_factor,
+            "downsample_factor": factors,
             "max_depth": max_depth,
             "disable_after": disable_after,
         },
@@ -108,7 +122,9 @@ class TokenDownsamplingScript(scripts.Script):
         return scripts.AlwaysVisible
 
     def _enabled(self, p):
-        return getattr(p, "token_downsampling_factor", shared.opts.token_downsampling_factor) > 1
+        factor1 = getattr(p, "token_downsampling_factor", shared.opts.token_downsampling_factor)
+        factor2 = getattr(p, "token_downsampling_factor2", shared.opts.token_downsampling_factor2)
+        return factor1 > 1 or factor2 > 1
 
     def process(self, p, *args, **kwargs):
         if not self._enabled(p):
@@ -117,26 +133,19 @@ class TokenDownsamplingScript(scripts.Script):
 
         # xyz overrides settings via p
         downsample_factor = getattr(p, "token_downsampling_factor", shared.opts.token_downsampling_factor)
-        max_depth = getattr(p, "token_downsampling_max_depth", shared.opts.token_downsampling_max_depth)
+        downsample_factor2 = getattr(p, "token_downsampling_factor2", shared.opts.token_downsampling_factor2)
         disable_after = getattr(p, "token_downsampling_disable_after", shared.opts.token_downsampling_disable_after)
-
-        # SDXL only has two depths
-        if shared.sd_model.is_sdxl:
-            if max_depth > 2:
-                max_depth = min(max_depth, 2)
-                print(f"Token Downsampling: clamped max_depth to {max_depth} for SDXL")
-            # sdxl uses 2 or 3. offset to start at 1 for UI simplicity
-            max_depth += 1
 
         apply_patch(
             model=shared.sd_model,
+            is_sdxl=shared.sd_model.is_sdxl,
             downsample_factor=downsample_factor,
-            max_depth=2**(max_depth-1),
+            downsample_factor2=downsample_factor2,
             disable_after=int(disable_after * p.steps),
         )
 
         p.extra_generation_params["ToDo factor"] = downsample_factor
-        p.extra_generation_params["ToDo max depth"] = max_depth
+        p.extra_generation_params["ToDo factor2"] = downsample_factor2
         p.extra_generation_params["ToDo disable after"] = disable_after
 
     def process_batch(self, p, *args, **kwargs):
@@ -155,13 +164,13 @@ def on_ui_settings():
             component_args={"minimum": 1.0, "maximum": 5.0, "step": 0.5},
             infotext="ToDo factor",
         ).info("1 = disable"),
-        "token_downsampling_max_depth": shared.OptionInfo(
-            default=1,
-            label="Token downsampling max depth",
+        "token_downsampling_factor2": shared.OptionInfo(
+            default=1.0,
+            label="Token downsampling factor 2",
             component=gr.Slider,
-            component_args={"minimum": 1, "maximum": 4, "step": 1},
-            infotext="ToDo max depth",
-        ).info("Higher affects more layers. For SDXL only 1 and 2 are valid and will be clamped"),
+            component_args={"minimum": 1.0, "maximum": 5.0, "step": 0.5},
+            infotext="ToDo factor2",
+        ).info("1 = disable. Affects deeper layer but causes more quality loss"),
         "token_downsampling_disable_after": shared.OptionInfo(
             default=1.0,
             label="Token downsampling disable after",
@@ -181,7 +190,7 @@ def add_xyz_axis_options():
 
     todo_axis_options = [
         xyz_grid.AxisOption("[ToDo] Downsampling factor", float, xyz_grid.apply_field("token_downsampling_factor")),
-        xyz_grid.AxisOption("[ToDo] Max depth", int, xyz_grid.apply_field("token_downsampling_max_depth"), choices=lambda: [1, 2, 3, 4]),
+        xyz_grid.AxisOption("[ToDo] Downsampling factor 2", float, xyz_grid.apply_field("token_downsampling_factor2")),
         xyz_grid.AxisOption("[ToDo] Disable after", float, xyz_grid.apply_field("token_downsampling_disable_after")),
     ]
 
